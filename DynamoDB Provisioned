@@ -1,0 +1,107 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_kms_key" "cmk" {
+  key_id = var.key_id
+  #key_id = "alias/ERS-us-east-1-dev-kms"
+}
+
+data "aws_kms_key" "secondary" {
+  provider = aws.uswest2
+  key_id = var.key_id  
+}
+
+################################################################################
+# DynamoDB Global Table for Provisioned Capacity mode
+################################################################################
+
+module "dynamodb_table" {
+
+  source                                = "../terraform-aws-dynamodb"
+  name                                  = var.name
+  table_class                           = var.table_class
+  billing_mode                          = var.billing_mode
+  hash_key                              = var.hash_key
+  range_key                             = var.range_key
+  read_capacity                         = var.read_capacity
+  write_capacity                        = var.write_capacity
+  autoscaling_enabled                   = var.autoscaling_enabled
+  ignore_changes_global_secondary_index = var.ignore_changes_global_secondary_index
+  ttl_enabled                           = var.ttl_enabled
+  ttl_attribute_name                    = var.ttl_attribute_name
+  stream_enabled                        = var.stream_enabled
+  stream_view_type                      = var.stream_view_type
+  server_side_encryption_kms_key_arn    = data.aws_kms_key.cmk.arn 
+  point_in_time_recovery_enabled        = var.point_in_time_recovery_enabled
+  key_id                                = var.key_id
+  tags                                  = var.tags
+
+   autoscaling_read = {
+    scale_in_cooldown  = 50
+    scale_out_cooldown = 40
+    target_value       = 70
+    max_capacity       = 10
+  }
+
+  autoscaling_write = {
+    scale_in_cooldown  = 50
+    scale_out_cooldown = 40
+    target_value       = 70
+    max_capacity       = 10
+  }
+
+  autoscaling_indexes = {
+    TitleIndex = {
+      read_max_capacity  = 30
+      read_min_capacity  = 10
+      write_max_capacity = 30
+      write_min_capacity = 10
+    }
+  }
+
+  attributes = [
+    {
+      name = "id"
+      type = "N"
+    },
+    {
+      name = "title"
+      type = "S"
+    },
+    {
+      name = "age"
+      type = "N"
+    }
+  ]
+
+  global_secondary_indexes = [
+    {
+      name               = "TitleIndex"
+      hash_key           = "title"
+      range_key          = "age"
+      projection_type    = "INCLUDE"
+      non_key_attributes = ["id"]
+      write_capacity     = 10
+      read_capacity      = 10
+    }
+  ]  
+
+
+
+/* resource "aws_dynamodb_global_table" "global-user-tables" {
+  depends_on = [
+    "module.dynamodb_table"    
+  ]
+
+  name = "gwe-app-dv1-ddb-001"
+
+  replica {
+    region_name = "us-west-2"
+  } */
+
+  replica_regions = [{
+    region_name            = "us-west-2"
+    kms_key_arn            = data.aws_kms_key.secondary.arn
+    propagate_tags         = true
+    point_in_time_recovery = true
+  }]
+}
